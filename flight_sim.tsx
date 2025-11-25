@@ -17,6 +17,8 @@ const FlightSimulator = () => {
   useEffect(() => {
     if (!mountRef.current) return;
 
+    targetSpeedRef.current = 100;
+
     const checkMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
     setIsMobile(checkMobile);
 
@@ -280,7 +282,18 @@ const FlightSimulator = () => {
       return group;
     };
 
-    let vehicleGroup = createPlane();
+    const createVehicleGroup = () => {
+      switch (vehicle) {
+        case 'witch':
+          return createWitch();
+        case 'xwing':
+          return createXWing();
+        default:
+          return createPlane();
+      }
+    };
+
+    let vehicleGroup = createVehicleGroup();
     vehicleGroup.position.set(0, 500, 0);
     scene.add(vehicleGroup);
 
@@ -455,11 +468,10 @@ const FlightSimulator = () => {
       mountRef.current?.removeChild(renderer.domElement);
       renderer.dispose();
     };
-  }, []);
+  }, [vehicle]);
 
   const handleVehicleChange = (newVehicle) => {
     setVehicle(newVehicle);
-    window.location.reload();
   };
 
   return (
