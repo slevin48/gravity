@@ -1,0 +1,43 @@
+{
+  "name": "Gravity",
+  "short_name": "Gravity",
+  "description": "An interactive gravity and physics simulation",
+  "start_url": "/gravity/",
+  "scope": "/gravity/",
+  "display": "standalone",
+  "theme_color": "#000000",
+  "background_color": "#ffffff",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/gravity/broom.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "/gravity/broom.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "form_factor": "wide"
+    }
+  ],
+  "categories": ["productivity", "education"],
+  "shortcuts": [
+    {
+      "name": "Launch Gravity Sim",
+      "short_name": "Gravity Sim",
+      "description": "Launch the gravity simulation",
+      "url": "/gravity/",
+      "icons": [
+        {
+          "src": "/gravity/broom.svg",
+          "sizes": "any",
+          "type": "image/svg+xml"
+        }
+      ]
+    }
+  ]
+}
