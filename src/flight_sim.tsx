@@ -15,9 +15,15 @@ const FlightSimulator = () => {
   const targetSpeedRef = useRef(100);
 
   useEffect(() => {
+
     if (!mountRef.current) return;
 
     targetSpeedRef.current = 100;
+
+    // Remove any existing children (canvas) to prevent duplicates
+    while (mountRef.current.firstChild) {
+      mountRef.current.removeChild(mountRef.current.firstChild);
+    }
 
     const checkMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
     setIsMobile(checkMobile);
