@@ -13,6 +13,13 @@ const FlightSimulator = () => {
   const [hasRecording, setHasRecording] = useState(false);
   const [recordedSamples, setRecordedSamples] = useState(0);
   const [recordingDuration, setRecordingDuration] = useState(0);
+  const [isReplayMode, setIsReplayMode] = useState(false);
+  const [replayPlaying, setReplayPlaying] = useState(false);
+  const [replayCurrentTime, setReplayCurrentTime] = useState(0);
+  const [replayDuration, setReplayDuration] = useState(0);
+  const [replayFileName, setReplayFileName] = useState('');
+  const [replaySamples, setReplaySamples] = useState(0);
+  const [replayError, setReplayError] = useState('');
   const touchStartRef = useRef({ x: 0, y: 0 });
   const touchCurrentRef = useRef({ x: 0, y: 0 });
   const speedIntervalRef = useRef(null);
@@ -20,6 +27,12 @@ const FlightSimulator = () => {
   const recordedDataRef = useRef([]);
   const recordingStartRef = useRef(0);
   const isRecordingRef = useRef(false);
+  const replayDataRef = useRef([]);
+  const replayActiveRef = useRef(false);
+  const replayPlayingRef = useRef(false);
+  const replayDurationRef = useRef(0);
+  const replayCurrentTimeRef = useRef(0);
+  const replayIndexRef = useRef(0);
 
   const startRecording = () => {
     recordedDataRef.current = [];
@@ -81,6 +94,174 @@ const FlightSimulator = () => {
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
+  };
+
+  const parseFlightCsv = (csvText) => {
+    const lines = csvText
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+    if (lines.length <= 1) {
+      throw new Error('CSV is missing sample rows.');
+    }
+
+    const header = lines[0].split(',').map((entry) => entry.trim());
+    const required = ['time_s', 'pos_x', 'pos_y', 'pos_z', 'speed_kmh', 'altitude_m', 'pitch_deg', 'roll_deg'];
+    const missing = required.filter((key) => !header.includes(key));
+    if (missing.length) {
+      throw new Error(`Missing required columns: ${missing.join(', ')}`);
+    }
+
+    const columnIndex = {};
+    required.forEach((key) => {
+      columnIndex[key] = header.indexOf(key);
+    });
+
+    const samples = [];
+    for (let i = 1; i < lines.length; i++) {
+      const cells = lines[i].split(',').map((value) => value.trim());
+      if (cells.length < header.length) continue;
+      const timeValue = parseFloat(cells[columnIndex.time_s]);
+      const x = parseFloat(cells[columnIndex.pos_x]);
+      const y = parseFloat(cells[columnIndex.pos_y]);
+      const z = parseFloat(cells[columnIndex.pos_z]);
+      const speedValue = parseFloat(cells[columnIndex.speed_kmh]);
+      const altitudeValue = parseFloat(cells[columnIndex.altitude_m]);
+      const pitchValue = parseFloat(cells[columnIndex.pitch_deg]);
+      const rollValue = parseFloat(cells[columnIndex.roll_deg]);
+      const invalid = [timeValue, x, y, z, speedValue, altitudeValue, pitchValue, rollValue].some((val) =>
+        Number.isNaN(val)
+      );
+      if (invalid) continue;
+      samples.push({
+        time: timeValue,
+        x,
+        y,
+        z,
+        speed: speedValue,
+        altitude: altitudeValue,
+        pitch: pitchValue,
+        roll: rollValue
+      });
+    }
+
+    if (!samples.length) {
+      throw new Error('No valid samples found in CSV.');
+    }
+
+    const startTime = samples[0].time;
+    samples.forEach((sample) => {
+      sample.time -= startTime;
+    });
+
+    for (let i = 0; i < samples.length; i++) {
+      const prev = samples[Math.max(0, i - 1)];
+      const next = samples[Math.min(samples.length - 1, i + 1)];
+      const deltaX = next.x - prev.x;
+      const deltaZ = next.z - prev.z;
+      samples[i].yaw = Math.atan2(deltaX, deltaZ);
+    }
+
+    return samples;
+  };
+
+  const resetReplayState = () => {
+    replayDataRef.current = [];
+    replayActiveRef.current = false;
+    replayPlayingRef.current = false;
+    replayDurationRef.current = 0;
+    replayCurrentTimeRef.current = 0;
+    replayIndexRef.current = 0;
+    setIsReplayMode(false);
+    setReplayPlaying(false);
+    setReplayCurrentTime(0);
+    setReplayDuration(0);
+    setReplayFileName('');
+    setReplaySamples(0);
+    setReplayError('');
+  };
+
+  const exitReplayMode = () => {
+    if (!replayActiveRef.current) return;
+    resetReplayState();
+  };
+
+  const activateReplay = (samples, fileName) => {
+    replayDataRef.current = samples;
+    replayActiveRef.current = true;
+    replayPlayingRef.current = true;
+    replayDurationRef.current = samples[samples.length - 1].time;
+    replayCurrentTimeRef.current = 0;
+    replayIndexRef.current = 0;
+    setIsReplayMode(true);
+    setReplayPlaying(true);
+    setReplayCurrentTime(0);
+    setReplayDuration(replayDurationRef.current);
+    setReplayFileName(fileName);
+    setReplaySamples(samples.length);
+  };
+
+  const handleReplayFileChange = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    try {
+      setReplayError('');
+      const text = await file.text();
+      const samples = parseFlightCsv(text);
+      if (isRecordingRef.current) {
+        stopRecording();
+      }
+      activateReplay(samples, file.name);
+    } catch (error) {
+      console.error('Replay load failed', error);
+      setReplayError(error.message || 'Failed to load CSV. Ensure it was exported from Gravity.');
+      resetReplayState();
+    }
+  };
+
+  const toggleReplayPlayback = () => {
+    if (!replayActiveRef.current) return;
+    const nextValue = !replayPlayingRef.current;
+    replayPlayingRef.current = nextValue;
+    if (nextValue && replayDurationRef.current > 0 && replayCurrentTimeRef.current >= replayDurationRef.current) {
+      replayCurrentTimeRef.current = 0;
+      replayIndexRef.current = 0;
+      setReplayCurrentTime(0);
+    }
+    setReplayPlaying(nextValue);
+  };
+
+  const handleReplayReset = () => {
+    if (!replayActiveRef.current) return;
+    replayCurrentTimeRef.current = 0;
+    replayIndexRef.current = 0;
+    if (replayPlayingRef.current) {
+      replayPlayingRef.current = false;
+      setReplayPlaying(false);
+    }
+    setReplayCurrentTime(0);
+  };
+
+  const handleReplaySliderChange = (event) => {
+    if (!replayActiveRef.current) return;
+    const value = parseFloat(event.target.value);
+    if (Number.isNaN(value)) return;
+    const clamped = Math.max(0, Math.min(value, replayDurationRef.current || 0));
+    replayCurrentTimeRef.current = clamped;
+    replayIndexRef.current = Math.max(0, Math.min(replayDataRef.current.length - 1, replayIndexRef.current));
+    setReplayCurrentTime(clamped);
+  };
+
+  const formatSeconds = (value) => {
+    if (!Number.isFinite(value)) return '0.0s';
+    if (value >= 60) {
+      const minutes = Math.floor(value / 60);
+      const seconds = value % 60;
+      return `${minutes}m ${seconds.toFixed(1)}s`;
+    }
+    return `${value.toFixed(1)}s`;
   };
 
   useEffect(() => {
@@ -468,93 +649,159 @@ const FlightSimulator = () => {
       window.addEventListener('touchend', handleTouchEnd);
     }
 
-    const animate = () => {
-      requestAnimationFrame(animate);
+    const lerpAngle = (start, end, t) => {
+      const diff = THREE.MathUtils.euclideanModulo(end - start + Math.PI, Math.PI * 2) - Math.PI;
+      return start + diff * t;
+    };
 
-      if (checkMobile && touchStartRef.current.x !== 0) {
-        const deltaX = (touchCurrentRef.current.x - touchStartRef.current.x) / window.innerWidth;
-        const deltaY = (touchCurrentRef.current.y - touchStartRef.current.y) / window.innerHeight;
-        
-        touchRoll = -deltaX * 1.5;
-        touchPitch = -deltaY * 1.0;
-        
-        vehicleGroup.rotation.z = THREE.MathUtils.clamp(touchRoll, -0.8, 0.8);
-        vehicleGroup.rotation.x = THREE.MathUtils.clamp(touchPitch, -0.5, 0.5);
-        
-        if (Math.abs(touchRoll) > 0.1) {
-          vehicleGroup.rotation.y -= touchRoll * 0.02;
-        }
-      } else if (!checkMobile) {
-        if (keys['w']) targetSpeedRef.current = Math.min(targetSpeedRef.current + 2, 300);
-        if (keys['s']) targetSpeedRef.current = Math.max(targetSpeedRef.current - 2, 50);
-        
-        if (keys['arrowup']) {
-          vehicleGroup.rotation.x = Math.min(vehicleGroup.rotation.x + 0.01, 0.5);
-        }
-        if (keys['arrowdown']) {
-          vehicleGroup.rotation.x = Math.max(vehicleGroup.rotation.x - 0.01, -0.5);
-        }
+    let lastFrameTime = performance.now();
 
-        if (keys['arrowleft']) {
-          vehicleGroup.rotation.z = Math.min(vehicleGroup.rotation.z + 0.02, 0.8);
-          vehicleGroup.rotation.y += 0.015;
-        } else if (keys['arrowright']) {
-          vehicleGroup.rotation.z = Math.max(vehicleGroup.rotation.z - 0.02, -0.8);
-          vehicleGroup.rotation.y -= 0.015;
-        } else {
-          vehicleGroup.rotation.z *= 0.95;
-        }
+    const updateReplayFrame = (deltaSeconds) => {
+      if (!replayActiveRef.current || !replayDataRef.current.length) return;
 
-        if (!keys['arrowup'] && !keys['arrowdown']) {
-          vehicleGroup.rotation.x *= 0.98;
+      const duration = replayDurationRef.current;
+      if (replayPlayingRef.current && duration > 0) {
+        let nextTime = replayCurrentTimeRef.current + deltaSeconds;
+        if (nextTime >= duration) {
+          nextTime = duration;
+          if (replayPlayingRef.current) {
+            replayPlayingRef.current = false;
+            setReplayPlaying(false);
+          }
         }
+        replayCurrentTimeRef.current = nextTime;
+        setReplayCurrentTime(nextTime);
       }
 
-      currentSpeed += (targetSpeedRef.current - currentSpeed) * 0.05;
+      const data = replayDataRef.current;
+      const cursor = Math.min(replayCurrentTimeRef.current, duration);
+      let idx = replayIndexRef.current;
 
-      direction.set(0, 0, 1);
-      direction.applyQuaternion(vehicleGroup.quaternion);
-      
-      velocity.copy(direction).multiplyScalar(currentSpeed * 0.016);
-      vehicleGroup.position.add(velocity);
+      while (idx < data.length - 2 && cursor > data[idx + 1].time) idx++;
+      while (idx > 0 && cursor < data[idx].time) idx--;
+      replayIndexRef.current = idx;
 
-      vehicleGroup.position.y += Math.sin(vehicleGroup.rotation.x) * currentSpeed * 0.01;
-      
-      if (vehicleGroup.position.y < 10) {
-        vehicleGroup.position.y = 10;
-        if (vehicleGroup.rotation.x < 0) vehicleGroup.rotation.x = 0;
+      const nextIdx = Math.min(data.length - 1, idx + 1);
+      const current = data[idx];
+      const nextSample = data[nextIdx];
+      const span = Math.max(0.0001, nextSample.time - current.time);
+      const t = nextIdx === idx ? 0 : THREE.MathUtils.clamp((cursor - current.time) / span, 0, 1);
+
+      const posX = THREE.MathUtils.lerp(current.x, nextSample.x, t);
+      const posY = THREE.MathUtils.lerp(current.y, nextSample.y, t);
+      const posZ = THREE.MathUtils.lerp(current.z, nextSample.z, t);
+      const pitchValue = THREE.MathUtils.lerp(current.pitch, nextSample.pitch, t);
+      const rollValue = THREE.MathUtils.lerp(current.roll, nextSample.roll, t);
+      const yawValue = lerpAngle(current.yaw, nextSample.yaw, t);
+      const speedValue = THREE.MathUtils.lerp(current.speed, nextSample.speed, t);
+      const altitudeValue = THREE.MathUtils.lerp(current.altitude, nextSample.altitude, t);
+
+      vehicleGroup.position.set(posX, posY, posZ);
+      vehicleGroup.rotation.set(
+        THREE.MathUtils.degToRad(pitchValue),
+        yawValue,
+        THREE.MathUtils.degToRad(rollValue)
+      );
+
+      setSpeed(Math.round(speedValue));
+      setAltitude(Math.round(altitudeValue));
+      setPitch(Math.round(pitchValue));
+      setRoll(Math.round(rollValue));
+    };
+
+    const animate = () => {
+      requestAnimationFrame(animate);
+      const now = performance.now();
+      const deltaSeconds = (now - lastFrameTime) / 1000;
+      lastFrameTime = now;
+
+      if (replayActiveRef.current && replayDataRef.current.length) {
+        updateReplayFrame(deltaSeconds);
+      } else {
+        if (checkMobile && touchStartRef.current.x !== 0) {
+          const deltaX = (touchCurrentRef.current.x - touchStartRef.current.x) / window.innerWidth;
+          const deltaY = (touchCurrentRef.current.y - touchStartRef.current.y) / window.innerHeight;
+          
+          touchRoll = -deltaX * 1.5;
+          touchPitch = -deltaY * 1.0;
+          
+          vehicleGroup.rotation.z = THREE.MathUtils.clamp(touchRoll, -0.8, 0.8);
+          vehicleGroup.rotation.x = THREE.MathUtils.clamp(touchPitch, -0.5, 0.5);
+          
+          if (Math.abs(touchRoll) > 0.1) {
+            vehicleGroup.rotation.y -= touchRoll * 0.02;
+          }
+        } else if (!checkMobile) {
+          if (keys['w']) targetSpeedRef.current = Math.min(targetSpeedRef.current + 2, 300);
+          if (keys['s']) targetSpeedRef.current = Math.max(targetSpeedRef.current - 2, 50);
+          
+          if (keys['arrowup']) {
+            vehicleGroup.rotation.x = Math.min(vehicleGroup.rotation.x + 0.01, 0.5);
+          }
+          if (keys['arrowdown']) {
+            vehicleGroup.rotation.x = Math.max(vehicleGroup.rotation.x - 0.01, -0.5);
+          }
+
+          if (keys['arrowleft']) {
+            vehicleGroup.rotation.z = Math.min(vehicleGroup.rotation.z + 0.02, 0.8);
+            vehicleGroup.rotation.y += 0.015;
+          } else if (keys['arrowright']) {
+            vehicleGroup.rotation.z = Math.max(vehicleGroup.rotation.z - 0.02, -0.8);
+            vehicleGroup.rotation.y -= 0.015;
+          } else {
+            vehicleGroup.rotation.z *= 0.95;
+          }
+
+          if (!keys['arrowup'] && !keys['arrowdown']) {
+            vehicleGroup.rotation.x *= 0.98;
+          }
+        }
+
+        currentSpeed += (targetSpeedRef.current - currentSpeed) * 0.05;
+
+        direction.set(0, 0, 1);
+        direction.applyQuaternion(vehicleGroup.quaternion);
+        
+        velocity.copy(direction).multiplyScalar(currentSpeed * 0.016);
+        vehicleGroup.position.add(velocity);
+
+        vehicleGroup.position.y += Math.sin(vehicleGroup.rotation.x) * currentSpeed * 0.01;
+        
+        if (vehicleGroup.position.y < 10) {
+          vehicleGroup.position.y = 10;
+          if (vehicleGroup.rotation.x < 0) vehicleGroup.rotation.x = 0;
+        }
+
+        const currentAltitude = Math.round(vehicleGroup.position.y);
+        const pitchDegrees = Math.round(vehicleGroup.rotation.x * 57.3);
+        const rollDegrees = Math.round(vehicleGroup.rotation.z * 57.3);
+
+        setSpeed(Math.round(currentSpeed));
+        setAltitude(currentAltitude);
+        setPitch(pitchDegrees);
+        setRoll(rollDegrees);
+
+        if (isRecordingRef.current) {
+          const elapsedSeconds = recordingStartRef.current
+            ? (performance.now() - recordingStartRef.current) / 1000
+            : 0;
+          recordedDataRef.current.push({
+            time: elapsedSeconds,
+            x: vehicleGroup.position.x,
+            y: vehicleGroup.position.y,
+            z: vehicleGroup.position.z,
+            speedValue: currentSpeed,
+            altitudeValue: vehicleGroup.position.y,
+            pitchValue: THREE.MathUtils.radToDeg(vehicleGroup.rotation.x),
+            rollValue: THREE.MathUtils.radToDeg(vehicleGroup.rotation.z)
+          });
+        }
       }
 
       const cameraWorldPos = cameraOffset.clone();
       cameraWorldPos.applyQuaternion(vehicleGroup.quaternion);
       camera.position.copy(vehicleGroup.position).add(cameraWorldPos);
       camera.lookAt(vehicleGroup.position);
-
-      const currentAltitude = Math.round(vehicleGroup.position.y);
-      const pitchDegrees = Math.round(vehicleGroup.rotation.x * 57.3);
-      const rollDegrees = Math.round(vehicleGroup.rotation.z * 57.3);
-
-      setSpeed(Math.round(currentSpeed));
-      setAltitude(currentAltitude);
-      setPitch(pitchDegrees);
-      setRoll(rollDegrees);
-
-      if (isRecordingRef.current) {
-        const now = performance.now();
-        const elapsedSeconds = recordingStartRef.current
-          ? (now - recordingStartRef.current) / 1000
-          : 0;
-        recordedDataRef.current.push({
-          time: elapsedSeconds,
-          x: vehicleGroup.position.x,
-          y: vehicleGroup.position.y,
-          z: vehicleGroup.position.z,
-          speedValue: currentSpeed,
-          altitudeValue: vehicleGroup.position.y,
-          pitchValue: THREE.MathUtils.radToDeg(vehicleGroup.rotation.x),
-          rollValue: THREE.MathUtils.radToDeg(vehicleGroup.rotation.z)
-        });
-      }
 
       renderer.render(scene, camera);
     };
@@ -586,6 +833,9 @@ const FlightSimulator = () => {
   const handleVehicleChange = (newVehicle) => {
     if (isRecordingRef.current) {
       stopRecording();
+    }
+    if (replayActiveRef.current) {
+      exitReplayMode();
     }
     setVehicle(newVehicle);
   };
@@ -655,90 +905,212 @@ const FlightSimulator = () => {
         position: 'absolute',
         top: isMobile ? 10 : 20,
         left: isMobile ? 10 : 20,
-        color: 'white',
-        fontFamily: 'monospace',
-        fontSize: isMobile ? '14px' : '18px',
-        textShadow: '2px 2px 4px rgba(0,0,0,0.8)',
-        background: 'rgba(0,0,0,0.4)',
-        padding: isMobile ? '10px' : '15px',
-        borderRadius: '8px',
-        minWidth: isMobile ? '150px' : '200px',
-        pointerEvents: 'none'
+        display: 'flex',
+        flexDirection: 'column',
+        gap: isMobile ? '8px' : '12px',
+        width: isMobile ? 'calc(100% - 20px)' : '280px'
       }}>
-        <div style={{ marginBottom: '8px' }}>
-          <strong>Speed:</strong> {speed} km/h
-        </div>
-        <div style={{ marginBottom: '8px' }}>
-          <strong>Altitude:</strong> {altitude} m
-        </div>
-        <div style={{ marginBottom: '8px' }}>
-          <strong>Pitch:</strong> {pitch}°
-        </div>
-        <div>
-          <strong>Roll:</strong> {roll}°
-        </div>
-      </div>
-
-      {/* Flight Recorder */}
-      <div style={{
-        position: 'absolute',
-        top: isMobile ? 130 : 200,
-        left: isMobile ? 10 : 20,
-        color: 'white',
-        fontFamily: 'monospace',
-        fontSize: isMobile ? '12px' : '14px',
-        textShadow: '2px 2px 4px rgba(0,0,0,0.8)',
-        background: 'rgba(0,0,0,0.55)',
-        padding: isMobile ? '10px' : '15px',
-        borderRadius: '8px',
-        minWidth: '200px',
-        pointerEvents: 'auto',
-        border: '1px solid rgba(255,255,255,0.4)'
-      }}>
-        <div style={{ fontWeight: 'bold', marginBottom: '8px' }}>Flight Recorder</div>
-        <button
-          onClick={handleToggleRecording}
-          style={{
-            width: '100%',
-            padding: '8px',
-            marginBottom: hasRecording ? '8px' : '0',
-            background: isRecording ? 'rgba(244, 67, 54, 0.9)' : 'rgba(76, 175, 80, 0.9)',
-            color: 'white',
-            border: 'none',
-            borderRadius: '4px',
-            cursor: 'pointer',
-            fontWeight: 'bold'
-          }}
-        >
-          {isRecording ? 'Stop Recording' : 'Start Recording'}
-        </button>
-        {isRecording && (
-          <div style={{ marginTop: '8px' }}>
-            Recording • {recordedSamples} pts · {recordingDuration.toFixed(1)}s
+        <div style={{
+          color: 'white',
+          fontFamily: 'monospace',
+          fontSize: isMobile ? '14px' : '18px',
+          textShadow: '2px 2px 4px rgba(0,0,0,0.8)',
+          background: 'rgba(0,0,0,0.4)',
+          padding: isMobile ? '10px' : '15px',
+          borderRadius: '8px',
+          pointerEvents: 'none'
+        }}>
+          <div style={{ marginBottom: '8px' }}>
+            <strong>Speed:</strong> {speed} km/h
           </div>
-        )}
-        {!isRecording && hasRecording && (
-          <>
-            <div style={{ marginBottom: '8px' }}>
-              Ready to download • {recordedSamples} pts ({recordingDuration.toFixed(1)}s)
+          <div style={{ marginBottom: '8px' }}>
+            <strong>Altitude:</strong> {altitude} m
+          </div>
+          <div style={{ marginBottom: '8px' }}>
+            <strong>Pitch:</strong> {pitch}°
+          </div>
+          <div>
+            <strong>Roll:</strong> {roll}°
+          </div>
+        </div>
+
+        {/* Flight Recorder */}
+        <div style={{
+          color: 'white',
+          fontFamily: 'monospace',
+          fontSize: isMobile ? '12px' : '14px',
+          textShadow: '2px 2px 4px rgba(0,0,0,0.8)',
+          background: 'rgba(0,0,0,0.55)',
+          padding: isMobile ? '10px' : '15px',
+          borderRadius: '8px',
+          pointerEvents: 'auto',
+          border: '1px solid rgba(255,255,255,0.4)'
+        }}>
+          <div style={{ fontWeight: 'bold', marginBottom: '8px' }}>Flight Recorder</div>
+          <button
+            onClick={handleToggleRecording}
+            disabled={isReplayMode}
+            style={{
+              width: '100%',
+              padding: '8px',
+              marginBottom: hasRecording ? '8px' : '0',
+              background: isRecording ? 'rgba(244, 67, 54, 0.9)' : 'rgba(76, 175, 80, 0.9)',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: isReplayMode ? 'not-allowed' : 'pointer',
+              opacity: isReplayMode ? 0.55 : 1,
+              fontWeight: 'bold'
+            }}
+            title={isReplayMode ? 'Exit replay mode before recording a new flight.' : ''}
+          >
+            {isRecording ? 'Stop Recording' : 'Start Recording'}
+          </button>
+          {isReplayMode && !isRecording && (
+            <div style={{ marginTop: '6px', color: '#ffd54f' }}>
+              Replay mode disables live recording.
             </div>
-            <button
-              onClick={handleDownloadRecording}
+          )}
+          {isRecording && (
+            <div style={{ marginTop: '8px' }}>
+              Recording • {recordedSamples} pts · {recordingDuration.toFixed(1)}s
+            </div>
+          )}
+          {!isRecording && hasRecording && (
+            <>
+              <div style={{ marginBottom: '8px' }}>
+                Ready to download • {recordedSamples} pts ({recordingDuration.toFixed(1)}s)
+              </div>
+              <button
+                onClick={handleDownloadRecording}
+                style={{
+                  width: '100%',
+                  padding: '8px',
+                  background: 'rgba(33, 150, 243, 0.9)',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  fontWeight: 'bold'
+                }}
+              >
+                Download CSV
+              </button>
+            </>
+          )}
+        </div>
+
+        {/* Flight Replay */}
+        <div style={{
+          color: 'white',
+          fontFamily: 'monospace',
+          fontSize: isMobile ? '12px' : '14px',
+          textShadow: '2px 2px 4px rgba(0,0,0,0.8)',
+          background: 'rgba(0,0,0,0.55)',
+          padding: isMobile ? '10px' : '15px',
+          borderRadius: '8px',
+          pointerEvents: 'auto',
+          border: '1px solid rgba(255,255,255,0.4)'
+        }}>
+          <div style={{ fontWeight: 'bold', marginBottom: '8px' }}>Flight Replay</div>
+          <label style={{
+            display: 'inline-flex',
+            flexDirection: 'column',
+            gap: '4px',
+            marginBottom: '8px'
+          }}>
+            <span style={{ fontSize: '12px', opacity: 0.9 }}>Load CSV</span>
+            <input
+              type="file"
+              accept=".csv,text/csv"
+              onChange={handleReplayFileChange}
               style={{
-                width: '100%',
-                padding: '8px',
-                background: 'rgba(33, 150, 243, 0.9)',
+                background: 'rgba(0,0,0,0.3)',
                 color: 'white',
-                border: 'none',
+                border: '1px dashed rgba(255,255,255,0.4)',
                 borderRadius: '4px',
-                cursor: 'pointer',
-                fontWeight: 'bold'
+                padding: '6px'
               }}
-            >
-              Download CSV
-            </button>
-          </>
-        )}
+            />
+          </label>
+          {replayError && (
+            <div style={{ marginBottom: '8px', color: '#ff8a80' }}>{replayError}</div>
+          )}
+          {isReplayMode ? (
+            <>
+              <div style={{ marginBottom: '6px' }}>
+                <div style={{ fontWeight: 'bold' }}>{replayFileName}</div>
+                <div style={{ fontSize: '12px', opacity: 0.8 }}>
+                  {replaySamples} samples · {formatSeconds(replayDuration)}
+                </div>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={replayDuration || 0}
+                step="0.05"
+                value={replayCurrentTime}
+                onChange={handleReplaySliderChange}
+                style={{ width: '100%', marginBottom: '6px' }}
+              />
+              <div style={{ fontSize: '12px', marginBottom: '8px' }}>
+                Time {formatSeconds(replayCurrentTime)} / {formatSeconds(replayDuration)}
+              </div>
+              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                <button
+                  onClick={toggleReplayPlayback}
+                  style={{
+                    flex: '1 1 45%',
+                    padding: '6px',
+                    background: replayPlaying ? 'rgba(244, 67, 54, 0.9)' : 'rgba(76, 175, 80, 0.9)',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    fontWeight: 'bold'
+                  }}
+                >
+                  {replayPlaying ? 'Pause' : 'Play'}
+                </button>
+                <button
+                  onClick={handleReplayReset}
+                  style={{
+                    flex: '1 1 45%',
+                    padding: '6px',
+                    background: 'rgba(33, 150, 243, 0.9)',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    fontWeight: 'bold'
+                  }}
+                >
+                  Reset
+                </button>
+                <button
+                  onClick={exitReplayMode}
+                  style={{
+                    width: '100%',
+                    padding: '6px',
+                    marginTop: '4px',
+                    background: 'rgba(158, 158, 158, 0.9)',
+                    color: '#111',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    fontWeight: 'bold'
+                  }}
+                >
+                  Exit Replay
+                </button>
+              </div>
+            </>
+          ) : (
+            <div style={{ opacity: 0.8, fontSize: '12px' }}>
+              Upload a CSV exported from the Flight Recorder to relive that exact trajectory inside the sim.
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Mobile Speed Controls */}
