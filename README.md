@@ -23,6 +23,11 @@ Gravity is a small React app demonstrating a flight simulation toy: lift, thrust
 - Keyboard controls for intuitive piloting
 - Ready for a screen recording to showcase the demo
 
+## TODO
+
+- Add flight data recording mode
+- Add flight replaying mode from csv trajectory
+
 ## Getting Started
 
 - Prerequisites: `node` (v16+ recommended) and `npm` or `pnpm`/`yarn`.
