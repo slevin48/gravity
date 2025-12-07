@@ -22,11 +22,37 @@ Gravity is a small React app demonstrating a flight simulation toy: lift, thrust
 - Simple physics model for lift, thrust, and drag
 - Keyboard controls for intuitive piloting
 - Ready for a screen recording to showcase the demo
+- Flight data recording mode
+
+
+
+https://github.com/user-attachments/assets/ae9e9144-7280-46f6-a13b-6118357a1683
+
+
+
+## Flight Data Replay (MATLAB)
+
+- Use `matlab/gravity_flight_dashboard.m` to replay a CSV exported from the in-app recorder.
+- From MATLAB, call:
+
+```matlab
+gravity_flight_dashboard('/path/to/gravity-flight-2025-12-07T00-31-32.681Z.csv')
+```
+
+If you omit the path, MATLAB prompts you to pick a CSV and launches an interactive dashboard with playback controls, 3D visualization, and live telemetry readouts.
+
+
+
+https://github.com/user-attachments/assets/23184851-2b94-4248-8e35-c29f2e6a08b2
+
+
 
 ## TODO
 
-- Add flight data recording mode
+
 - Add flight replaying mode from csv trajectory
+
+  
 
 ## Getting Started
 
