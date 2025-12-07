@@ -9,10 +9,93 @@ const FlightSimulator = () => {
   const [roll, setRoll] = useState(0);
   const [isMobile, setIsMobile] = useState(false);
   const [vehicle, setVehicle] = useState('plane');
+  const [isRecording, setIsRecording] = useState(false);
+  const [hasRecording, setHasRecording] = useState(false);
+  const [recordedSamples, setRecordedSamples] = useState(0);
+  const [recordingDuration, setRecordingDuration] = useState(0);
   const touchStartRef = useRef({ x: 0, y: 0 });
   const touchCurrentRef = useRef({ x: 0, y: 0 });
   const speedIntervalRef = useRef(null);
   const targetSpeedRef = useRef(100);
+  const recordedDataRef = useRef([]);
+  const recordingStartRef = useRef(0);
+  const isRecordingRef = useRef(false);
+
+  const startRecording = () => {
+    recordedDataRef.current = [];
+    setRecordedSamples(0);
+    setRecordingDuration(0);
+    setHasRecording(false);
+    recordingStartRef.current = performance.now();
+    isRecordingRef.current = true;
+    setIsRecording(true);
+  };
+
+  const stopRecording = () => {
+    if (!isRecordingRef.current) return;
+    isRecordingRef.current = false;
+    setIsRecording(false);
+    const totalSamples = recordedDataRef.current.length;
+    setRecordedSamples(totalSamples);
+    if (recordingStartRef.current) {
+      const durationSeconds = (performance.now() - recordingStartRef.current) / 1000;
+      setRecordingDuration(Number(durationSeconds.toFixed(1)));
+    }
+    setHasRecording(totalSamples > 0);
+    recordingStartRef.current = 0;
+  };
+
+  const handleToggleRecording = () => {
+    if (isRecordingRef.current) {
+      stopRecording();
+      return;
+    }
+    startRecording();
+  };
+
+  const handleDownloadRecording = () => {
+    if (!recordedDataRef.current.length) return;
+
+    const header = 'time_s,pos_x,pos_y,pos_z,speed_kmh,altitude_m,pitch_deg,roll_deg';
+    const rows = recordedDataRef.current.map((sample) => {
+      const { time, x, y, z, speedValue, altitudeValue, pitchValue, rollValue } = sample;
+      return [
+        time.toFixed(2),
+        x.toFixed(2),
+        y.toFixed(2),
+        z.toFixed(2),
+        speedValue.toFixed(1),
+        altitudeValue.toFixed(2),
+        pitchValue.toFixed(2),
+        rollValue.toFixed(2)
+      ].join(',');
+    });
+
+    const csv = [header, ...rows].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `gravity-flight-${new Date().toISOString().replace(/[:]/g, '-')}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  useEffect(() => {
+    if (!isRecording) return undefined;
+
+    const interval = setInterval(() => {
+      setRecordedSamples(recordedDataRef.current.length);
+      if (recordingStartRef.current) {
+        const durationSeconds = (performance.now() - recordingStartRef.current) / 1000;
+        setRecordingDuration(Number(durationSeconds.toFixed(1)));
+      }
+    }, 500);
+
+    return () => clearInterval(interval);
+  }, [isRecording]);
 
   useEffect(() => {
 
@@ -447,10 +530,31 @@ const FlightSimulator = () => {
       camera.position.copy(vehicleGroup.position).add(cameraWorldPos);
       camera.lookAt(vehicleGroup.position);
 
+      const currentAltitude = Math.round(vehicleGroup.position.y);
+      const pitchDegrees = Math.round(vehicleGroup.rotation.x * 57.3);
+      const rollDegrees = Math.round(vehicleGroup.rotation.z * 57.3);
+
       setSpeed(Math.round(currentSpeed));
-      setAltitude(Math.round(vehicleGroup.position.y));
-      setPitch(Math.round(vehicleGroup.rotation.x * 57.3));
-      setRoll(Math.round(vehicleGroup.rotation.z * 57.3));
+      setAltitude(currentAltitude);
+      setPitch(pitchDegrees);
+      setRoll(rollDegrees);
+
+      if (isRecordingRef.current) {
+        const now = performance.now();
+        const elapsedSeconds = recordingStartRef.current
+          ? (now - recordingStartRef.current) / 1000
+          : 0;
+        recordedDataRef.current.push({
+          time: elapsedSeconds,
+          x: vehicleGroup.position.x,
+          y: vehicleGroup.position.y,
+          z: vehicleGroup.position.z,
+          speedValue: currentSpeed,
+          altitudeValue: vehicleGroup.position.y,
+          pitchValue: THREE.MathUtils.radToDeg(vehicleGroup.rotation.x),
+          rollValue: THREE.MathUtils.radToDeg(vehicleGroup.rotation.z)
+        });
+      }
 
       renderer.render(scene, camera);
     };
@@ -466,6 +570,9 @@ const FlightSimulator = () => {
 
     return () => {
       window.removeEventListener('resize', handleResize);
+      if (isRecordingRef.current) {
+        stopRecording();
+      }
       if (checkMobile) {
         window.removeEventListener('touchstart', handleTouchStart);
         window.removeEventListener('touchmove', handleTouchMove);
@@ -477,6 +584,9 @@ const FlightSimulator = () => {
   }, [vehicle]);
 
   const handleVehicleChange = (newVehicle) => {
+    if (isRecordingRef.current) {
+      stopRecording();
+    }
     setVehicle(newVehicle);
   };
 
@@ -567,6 +677,68 @@ const FlightSimulator = () => {
         <div>
           <strong>Roll:</strong> {roll}°
         </div>
+      </div>
+
+      {/* Flight Recorder */}
+      <div style={{
+        position: 'absolute',
+        top: isMobile ? 130 : 200,
+        left: isMobile ? 10 : 20,
+        color: 'white',
+        fontFamily: 'monospace',
+        fontSize: isMobile ? '12px' : '14px',
+        textShadow: '2px 2px 4px rgba(0,0,0,0.8)',
+        background: 'rgba(0,0,0,0.55)',
+        padding: isMobile ? '10px' : '15px',
+        borderRadius: '8px',
+        minWidth: '200px',
+        pointerEvents: 'auto',
+        border: '1px solid rgba(255,255,255,0.4)'
+      }}>
+        <div style={{ fontWeight: 'bold', marginBottom: '8px' }}>Flight Recorder</div>
+        <button
+          onClick={handleToggleRecording}
+          style={{
+            width: '100%',
+            padding: '8px',
+            marginBottom: hasRecording ? '8px' : '0',
+            background: isRecording ? 'rgba(244, 67, 54, 0.9)' : 'rgba(76, 175, 80, 0.9)',
+            color: 'white',
+            border: 'none',
+            borderRadius: '4px',
+            cursor: 'pointer',
+            fontWeight: 'bold'
+          }}
+        >
+          {isRecording ? 'Stop Recording' : 'Start Recording'}
+        </button>
+        {isRecording && (
+          <div style={{ marginTop: '8px' }}>
+            Recording • {recordedSamples} pts · {recordingDuration.toFixed(1)}s
+          </div>
+        )}
+        {!isRecording && hasRecording && (
+          <>
+            <div style={{ marginBottom: '8px' }}>
+              Ready to download • {recordedSamples} pts ({recordingDuration.toFixed(1)}s)
+            </div>
+            <button
+              onClick={handleDownloadRecording}
+              style={{
+                width: '100%',
+                padding: '8px',
+                background: 'rgba(33, 150, 243, 0.9)',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontWeight: 'bold'
+              }}
+            >
+              Download CSV
+            </button>
+          </>
+        )}
       </div>
 
       {/* Mobile Speed Controls */}
